@@ -1,0 +1,9 @@
+# Core
+numpy
+pandas
+matplotlib
+torch
+pytorch-lightning
+pytorch-forecasting
+aiohttp
+websockets

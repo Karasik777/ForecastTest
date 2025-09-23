@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""
+Train a small Temporal Fusion Transformer on processed panel data.
+
+Example:
+  python scripts/train_tft.py --data data/processed/merged.parquet --lookback 168 --horizon 24 --epochs 15
+"""
+import argparse
+import warnings
+warnings.filterwarnings("ignore")
+
+from pathlib import Path
+import pandas as pd
+import torch
+import matplotlib.pyplot as plt
+
+# Modern Lightning (Option A)
+from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+
+# PyTorch Forecasting
+from pytorch_forecasting import TimeSeriesDataSet
+from pytorch_forecasting.data import NaNLabelEncoder
+from pytorch_forecasting.metrics import QuantileLoss
+from pytorch_forecasting.models import TemporalFusionTransformer
+
+# --- tolerant import for PredictCallback across PF versions (unused now, kept for reference) ---
+try:
+    from pytorch_forecasting.models.base import PredictCallback  # PF 0.10.x
+except Exception:
+    try:
+        from pytorch_forecasting.models.base.callbacks import PredictCallback  # PF ≥1.1.x / 1.4.x
+    except Exception:
+        PredictCallback = None
+# ------------------------------------------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--data", default="data/processed/merged.parquet")
+    p.add_argument("--lookback", type=int, default=168)
+    p.add_argument("--horizon", type=int, default=24)
+    p.add_argument("--epochs", type=int, default=15)
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--artifacts", default="artifacts")
+    p.add_argument("--device", choices=["auto", "cpu", "mps", "gpu"], default="auto")
+    return p.parse_args()
+
+def accel_from_arg(device: str):
+    if device == "cpu":
+        return dict(accelerator="cpu", devices=1)
+    if device == "mps":
+        return dict(accelerator="mps", devices=1)
+    if device == "gpu":
+        return dict(accelerator="gpu", devices=1)
+    if torch.cuda.is_available():
+        return dict(accelerator="gpu", devices=1)
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return dict(accelerator="mps", devices=1)
+    return dict(accelerator="cpu", devices=1)
+
+def main():
+    args = parse_args()
+    seed_everything(args.seed, workers=True)
+
+    df = pd.read_parquet(args.data)
+
+    # Ensure required columns exist
+    required_anyway = ["symbol", "open_time", "target"]
+    missing = [c for c in required_anyway if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Processed data is missing required columns: {missing}. "
+            "Rebuild features with 'python scripts/exec.py --features --interval 1m'."
+        )
+
+    # Build time_idx if missing
+    if "time_idx" not in df.columns:
+        df = df.sort_values(["symbol", "open_time"])
+        df["time_idx"] = df.groupby("symbol").cumcount()
+
+    # Rename for forecasting dataset
+    df = df.rename(columns={"symbol": "group_id"})
+
+    # FEATURES used by the model
+    known_reals = [
+        "hour", "dow", "dom", "ret_1", "ret_5", "vol_20", "rsi_14", "vol_norm",
+        *[c for c in df.columns if c.startswith("lag_")]
+    ]
+    keep = list(set(["group_id", "time_idx", "target"] + known_reals))
+    df = df[keep].dropna().reset_index(drop=True)
+
+    training_cutoff = df["time_idx"].max() - args.horizon
+
+    training = TimeSeriesDataSet(
+        df[df.time_idx <= training_cutoff],
+        time_idx="time_idx",
+        target="target",
+        group_ids=["group_id"],
+        max_encoder_length=args.lookback,
+        max_prediction_length=args.horizon,
+        time_varying_unknown_reals=["target"],
+        time_varying_known_reals=known_reals,
+        categorical_encoders={"group_id": NaNLabelEncoder().fit(df.group_id)},
+        add_relative_time_idx=True,
+        add_target_scales=True,
+        add_encoder_length=True,
+    )
+    validation = TimeSeriesDataSet.from_dataset(training, df, predict=True, stop_randomization=True)
+
+    train_loader = training.to_dataloader(train=True, batch_size=args.batch_size, num_workers=0)
+    val_loader   = validation.to_dataloader(train=False, batch_size=args.batch_size, num_workers=0)
+
+    tft = TemporalFusionTransformer.from_dataset(
+        training,
+        learning_rate=1e-3,
+        hidden_size=32,
+        attention_head_size=4,
+        dropout=0.1,
+        hidden_continuous_size=16,
+        loss=QuantileLoss(),
+        output_size=7,              # default quantiles include 0.5 at index 3
+        log_interval=50,
+        reduce_on_plateau_patience=3,
+    )
+
+    es = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=3, mode="min")
+    Path(args.artifacts).mkdir(parents=True, exist_ok=True)
+    ck = ModelCheckpoint(
+        monitor="val_loss", save_top_k=1, mode="min",
+        dirpath=args.artifacts, filename="tft-{epoch:02d}-{val_loss:.4f}"
+    )
+
+    # Trainer for training (on chosen device)
+    accel_kwargs = accel_from_arg(args.device)
+    trainer = Trainer(
+        max_epochs=args.epochs,
+        **accel_kwargs,
+        callbacks=[es, ck],
+        gradient_clip_val=0.1,
+        deterministic=True,
+        log_every_n_steps=10,
+    )
+
+    trainer.fit(tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    best_path = ck.best_model_path
+    print(f"Best checkpoint: {best_path}")
+
+    # --------- PREDICT (manual, no PredictCallback / trainer.predict) ----------
+    best = TemporalFusionTransformer.load_from_checkpoint(best_path)
+
+    # pick device consistent with training
+    accel = accel_kwargs.get("accelerator", "cpu")
+    if accel == "gpu" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif accel == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
+    best.to(device)
+    best.eval()
+
+    preds_chunks = []
+    with torch.no_grad():
+        for batch in val_loader:
+            # val_loader yields (x, y) or (x, y, weight); we only need x for inference
+            if isinstance(batch, (list, tuple)):
+                x = batch[0]
+            else:
+                x = batch
+
+            # move batch inputs to device
+            for k, v in list(x.items()):
+                if torch.is_tensor(v):
+                    x[k] = v.to(device)
+
+            out = best(x)  # forward; returns dict with "prediction"
+            preds = out["prediction"].detach().to("cpu")  # [B, horizon, n_quantiles]
+            preds_chunks.append(preds)
+
+    preds_tensor = torch.cat(preds_chunks, dim=0)  # [N, H, Q]
+    median = preds_tensor[0, :, 3].numpy()  # q=0.5 at index 3
+
+    # --- Plot directly from df using training_cutoff (no to_pandas) ---
+    first_gid = df["group_id"].iloc[0]
+    g = df[df["group_id"] == first_gid].sort_values("time_idx")
+
+    # encoder history = last lookback points up to cutoff
+    enc = g[g["time_idx"] <= training_cutoff].tail(args.lookback)
+
+    # future window = next horizon points after cutoff
+    fut = g[(g["time_idx"] > training_cutoff) &
+            (g["time_idx"] <= training_cutoff + args.horizon)]
+
+    # align lengths just in case
+    import numpy as _np
+    L = min(len(fut), len(median))
+    fut = fut.head(L)
+    pred_median = _np.asarray(median[:L])
+
+    plt.figure()
+    plt.plot(enc["time_idx"], enc["target"], label="history")
+    if len(fut):
+        plt.plot(fut["time_idx"], fut["target"], label="true_future")
+        plt.plot(fut["time_idx"], pred_median, label="pred_median")
+    plt.title(f"TFT demo — group {first_gid}")
+    plt.xlabel("time_idx"); plt.ylabel("target")
+    plt.legend(); plt.grid(True); plt.tight_layout()
+    fig_path = Path(args.artifacts) / "qualitative_forecast.png"
+    plt.savefig(fig_path, dpi=150)
+    print(f"Saved plot: {fig_path}")
+    # --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    main()
