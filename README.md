@@ -78,7 +78,7 @@ TFT does:
 
 ```mermaid
 flowchart TD
-  A[Raw OHLCV Data] --> B[Feature Engineering (lags, RSI, volatility)]
+  A[Raw OHLCV Data] --> B["Feature Engineering: lags, RSI, volatility"]
   B --> C[TimeSeriesDataSet Construction]
   C --> D[Temporal Fusion Transformer]
   D --> E[Probabilistic Forecasts]
