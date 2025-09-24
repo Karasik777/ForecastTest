@@ -7,8 +7,66 @@
 python scripts/exec.py --full   --symbols BTCUSDT ETHUSDT   --interval 1m   --days 3   --lookback 168   --horizon 24   --epochs 15   --batch-size 64   --device cpu
 ```
 
-Artifacts will be saved in:
+## Usage section by section
 
+### 1. Fetch raw data
+Download OHLCV data for the specified symbols and interval.
+
+```bash
+python scripts/exec.py --fetch \
+  --symbols BTCUSDT ETHUSDT \
+  --interval 1m \
+  --days 3
+```
+Artifacts:
+•	data/raw/ — raw CSV files
+
+### 2. Build Feature
+```bash
+python scripts/exec.py --features \
+  --interval 1m
+```
+Artifacts:
+•	data/processed/merged.parquet — feature dataset
+
+### 3. Train model
+```bash
+python scripts/exec.py --train \
+  --lookback 168 \
+  --horizon 24 \
+  --epochs 15 \
+  --batch-size 64 \
+  --device cpu
+```
+Artifacts:
+•	artifacts/*.ckpt — best model checkpoint
+•	artifacts/qualitative_forecast.png — forecast plot
+
+### 4. Evaluate model
+```bash 
+python scripts/exec.py --eval \
+  --lookback 168 \
+  --horizon 24 \
+  --folds 3 \
+  --batch-size 64 \
+  --device cpu \
+  --checkpoint artifacts/tft-epoch=11-val_loss=4.5663.ckpt
+```
+Artifacts:
+•	artifacts/evaluation.csv — metrics table
+•	artifacts/eval_mape_rmse.pdf/png — fold metrics plots
+•	artifacts/eval_improvement.pdf/png — TFT vs naive improvements
+
+### 5. Live (streaming / demo)
+```bash
+python scripts/exec.py --live \
+  --symbols BTCUSDT ETHUSDT \
+  --interval 1m
+```
+Artifacts:
+•	Console output or streaming plots (depends on implementation)
+
+Artifacts will be saved in:
 - artifacts/*.ckpt — model checkpoints
 - artifacts/qualitative_forecast.png — forecast plot
 - artifacts/evaluation.csv — metrics
