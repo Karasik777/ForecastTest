@@ -17,6 +17,7 @@ python scripts/exec.py --full \
 
 
 Artifacts will be saved in:
+
 •	artifacts/*.ckpt — model checkpoints
 •	artifacts/qualitative_forecast.png — forecast plot
 •	artifacts/evaluation.csv — metrics
