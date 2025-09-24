@@ -58,9 +58,9 @@ We model a simple process:
 y_t = 0.5 \cdot y_{t-1} + \sin(\mathrm{dow}_t) + \epsilon_t, \quad \epsilon_t \sim \mathcal{N}(0,1)
 \]
 
-- (y_{t-1}) captures autoregressive dependence.
-- (\mathrm{dow}_t) (day of week) introduces cyclic behavior.
-- (\epsilon_t) is noise.
+- \( y_{t-1} \) captures autoregressive dependence.
+- \( \mathrm{dow}_t \) (day of week) introduces cyclic behavior.
+- \( \epsilon_t \) is noise.
 
 Example Setup:
 
@@ -78,7 +78,7 @@ TFT does:
 
 ```mermaid
 flowchart TD
-  A[Raw OHLCV Data] --> B[Feature Engineering<br/>(lags, RSI, volatility)]
+  A[Raw OHLCV Data] --> B[Feature Engineering (lags, RSI, volatility)]
   B --> C[TimeSeriesDataSet Construction]
   C --> D[Temporal Fusion Transformer]
   D --> E[Probabilistic Forecasts]
