@@ -4,7 +4,15 @@
 
 ```bash
 # Run the full pipeline end-to-end
-python scripts/exec.py --full   --symbols BTCUSDT ETHUSDT   --interval 1m   --days 3   --lookback 168   --horizon 24   --epochs 15   --batch-size 64   --device cpu
+python scripts/exec.py --full   \
+--symbols BTCUSDT ETHUSDT  \
+ --interval 1m   \
+ --days 3   \
+ --lookback 168   \
+ --horizon 24   \
+ --epochs 15   \
+ --batch-size 64   \
+ --device cpu
 ```
 
 ## Usage section by section
