@@ -1,20 +1,10 @@
-# Re-create the README.txt file after environment reset
-
-readme_content = """# ForecastTest: Temporal Fusion Transformer for Cryptocurrency Forecasting
+# ForecastTest: Temporal Fusion Transformer for Cryptocurrency Forecasting
 
 ## Usage
 
 ```bash
 # Run the full pipeline end-to-end
-python scripts/exec.py --full \
-  --symbols BTCUSDT ETHUSDT \
-  --interval 1m \
-  --days 3 \
-  --lookback 168 \
-  --horizon 24 \
-  --epochs 15 \
-  --batch-size 64 \
-  --device cpu
+python scripts/exec.py --full   --symbols BTCUSDT ETHUSDT   --interval 1m   --days 3   --lookback 168   --horizon 24   --epochs 15   --batch-size 64   --device cpu
 ```
 
 Artifacts will be saved in:
@@ -64,13 +54,13 @@ This makes TFT particularly suitable for cryptocurrency forecasting.
 
 We model a simple process:
 
-\\[
-y_t = 0.5 \\cdot y_{t-1} + \\sin(\\mathrm{dow}_t) + \\epsilon_t, \\quad \\epsilon_t \\sim \\mathcal{N}(0,1)
-\\]
+\[
+y_t = 0.5 \cdot y_{t-1} + \sin(\mathrm{dow}_t) + \epsilon_t, \quad \epsilon_t \sim \mathcal{N}(0,1)
+\]
 
 - (y_{t-1}) captures autoregressive dependence.
-- (\\mathrm{dow}_t) (day of week) introduces cyclic behavior.
-- (\\epsilon_t) is noise.
+- (\mathrm{dow}_t) (day of week) introduces cyclic behavior.
+- (\epsilon_t) is noise.
 
 Example Setup:
 
@@ -128,11 +118,3 @@ We present a complete pipeline for cryptocurrency forecasting using the Temporal
 - Real-time, streaming inference  
 - Incorporation of sentiment, news, or social signals  
 - Multi-resolution forecasting (e.g. 1m, 5m, 1h intervals)
-"""
-
-# Save to file
-output_path = "/mnt/data/README.txt"
-with open(output_path, "w") as f:
-    f.write(readme_content)
-
-output_path
