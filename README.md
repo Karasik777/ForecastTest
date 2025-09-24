@@ -13,7 +13,7 @@ python scripts/exec.py --full \
   --epochs 15 \
   --batch-size 64 \
   --device cpu
-
+```
 
 Artifacts will be saved in:
 •	artifacts/*.ckpt — model checkpoints
