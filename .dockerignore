@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# Data / Artifacts
+artifacts/
+logs/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.onnx
+
+# VCS / IDE
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Notebooks caches
+.ipynb_checkpoints/
