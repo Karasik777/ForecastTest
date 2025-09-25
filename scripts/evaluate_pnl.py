@@ -140,7 +140,7 @@ def main():
     rr    = (pnl / cash) * 100.0
 
     out = {
-        "evaluated_at": pd.Timestamp.utcnow().tz_localize("UTC").isoformat(),
+        "evaluated_at": pd.Timestamp.utcnow().isoformat(),
         "symbol": symbol,
         "interval": interval,
         "entry_time": entry_ts.isoformat(),

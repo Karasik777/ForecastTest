@@ -1,0 +1,11 @@
+  "decision": {
+    "action": "HOLD",
+    "reason": "Forecasted peak +0.00% < threshold 4.50% (breakeven 4.00% + safety).",
+    "entry_time": "2025-09-25T01:22:59.999000+00:00",
+    "entry_price": 113186.24,
+    "target_time": "",
+    "target_price": NaN,
+    "expected_return_pct": 0.0,
+    "expected_pnl_usd": 0.0,
+    "commission_total_usd": 0.0
+  }

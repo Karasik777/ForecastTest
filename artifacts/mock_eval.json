@@ -1,0 +1,14 @@
+{
+  "evaluated_at": "2025-09-25T01:39:14.920787+00:00",
+  "symbol": "BTCUSDT",
+  "interval": "1m",
+  "entry_time": "2025-09-25T01:23:59.999000+00:00",
+  "entry_fill": 113114.0,
+  "sell_time": "2025-09-25T01:39:59.999000+00:00",
+  "sell_fill": 112800.0,
+  "commission_total_usd": 4.0,
+  "units_bought": 0.0008663825874781194,
+  "realized_pnl_usd": -2.2720441324681295,
+  "realized_return_pct": -2.2720441324681295,
+  "was_partial_window": true
+}

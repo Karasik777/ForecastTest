@@ -99,16 +99,16 @@ Other:
   -h, --help                    Show this help
 
 Examples:
-  ./run.sh --clean --clean-yes
-  ./run.sh --full --device cpu
-  ./run.sh --fetch --symbols "BTCUSDT ETHUSDT" --interval 1m --days 3
-  ./run.sh --features
-  ./run.sh --train --epochs 10 --batch-size 128 --device mps
-  ./run.sh --eval --folds 5 --checkpoint artifacts/tft-epoch=08-val_loss=3.0475.ckpt --device cpu
-  ./run.sh --plots --timefmt "%Y-%m-%d %H:%M"
-  ./run.sh --consensus-live --cons-symbol BTCUSDT --cons-horizon-m 60 --cons-edge 0.5
-  ./run.sh --consensus-eval
-  ./run.sh --consensus-plot --cons-pad-min 12
+  ./exec.sh --clean --clean-yes
+  ./exec.sh --full --device cpu
+  ./exec.sh --fetch --symbols "BTCUSDT ETHUSDT" --interval 1m --days 3
+  ./exec.sh --features
+  ./exec.sh --train --epochs 10 --batch-size 128 --device mps
+  ./exec.sh --eval --folds 5 --checkpoint artifacts/tft-epoch=08-val_loss=3.0475.ckpt --device cpu
+  ./exec.sh --plots --timefmt "%Y-%m-%d %H:%M"
+  ./exec.sh --consensus-live --cons-symbol BTCUSDT --cons-horizon-m 60 --cons-edge 0.5
+  ./exec.sh --consensus-eval
+  ./exec.sh --consensus-plot --cons-pad-min 12
 USAGE
 }
 
