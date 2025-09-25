@@ -29,6 +29,12 @@ TFT_HOOK_CMD=""           # optional: hook to your TFT pipeline command
 # <<< consensus-plot: defaults for plotting
 CONS_PAD_MIN=10           # minutes padding around forecast window for plotting
 
+# Clean toggles / knobs
+DO_CLEAN=0
+CLEAN_KEEP_METRICS=0
+CLEAN_DRY_RUN=0
+CLEAN_YES=0
+
 # Stages toggles (default: full if none given)
 DO_FETCH=0
 DO_FEATURES=0
@@ -48,15 +54,16 @@ usage() {
 Usage: ./run.sh [options]
 
 Stages (pick any; default is --full if none chosen):
-  --full                 Run fetch -> features -> train -> eval -> plots
-  --fetch                Only fetch raw data (setup_data.py)
-  --features             Only build features (make_features.py)
-  --train                Only train TFT (train_tft.py)
-  --eval                 Only evaluate (evaluate.py)
-  --plots                Only make evaluation plots (plot_evaluation.py)
-  --consensus-live       Run mock consensus decision now (scripts/consensus_live.py)          # <<< consensus
-  --consensus-eval       Evaluate realized PnL for last consensus (scripts/evaluate_pnl.py)   # <<< consensus
-  --consensus-plot       Plot consensus forecast/actuals & PnL (scripts/plot_consensus.py)    # <<< consensus-plot
+  --clean               Clean data & checkpoints (keep plots); calls scripts/clean_workspace.sh
+  --full                Run fetch -> features -> train -> eval -> plots
+  --fetch               Only fetch raw data (setup_data.py)
+  --features            Only build features (make_features.py)
+  --train               Only train TFT (train_tft.py)
+  --eval                Only evaluate (evaluate.py)
+  --plots               Only make evaluation plots (plot_evaluation.py)
+  --consensus-live      Run mock consensus decision now (scripts/consensus_live.py)
+  --consensus-eval      Evaluate realized PnL for last consensus (scripts/evaluate_pnl.py)
+  --consensus-plot      Plot consensus forecast/actuals & PnL (scripts/plot_consensus.py)
 
 Knobs (override defaults):
   --symbols "BTCUSDT ETHUSDT"   Symbols (space-separated, quote the list)
@@ -72,7 +79,12 @@ Knobs (override defaults):
   --timefmt "%Y-%m-%d %H:%M"    Datetime format for plots
   --skip-venv                   Skip venv creation/activation (use current env)
 
-Consensus knobs (for --consensus-live):                                                     # <<< consensus
+Clean options (forwarded to scripts/clean_workspace.sh):
+  --clean-keep-metrics          Preserve artifacts/*.csv (e.g., evaluation.csv)
+  --clean-dry-run               Show what would be deleted without deleting
+  --clean-yes                   Skip confirmation prompt
+
+Consensus knobs (for --consensus-live):
   --cons-symbol BTCUSDT          Override symbol (defaults to first of --symbols)
   --cons-horizon-m 60            Forecast horizon in minutes
   --cons-cash 100                Mock capital in USD
@@ -80,33 +92,32 @@ Consensus knobs (for --consensus-live):                                         
   --cons-edge 0.5                Extra edge (%) over breakeven required to trade
   --tft-hook-cmd "python ..."    Optional TFT pipeline command to produce preds
 
-Plotting knobs (for --consensus-plot):                                                      # <<< consensus-plot
+Plotting knobs (for --consensus-plot):
   --cons-pad-min 10              Minutes of padding around forecast window on the chart
 
 Other:
   -h, --help                    Show this help
 
 Examples:
+  ./run.sh --clean --clean-yes
   ./run.sh --full --device cpu
   ./run.sh --fetch --symbols "BTCUSDT ETHUSDT" --interval 1m --days 3
   ./run.sh --features
   ./run.sh --train --epochs 10 --batch-size 128 --device mps
   ./run.sh --eval --folds 5 --checkpoint artifacts/tft-epoch=08-val_loss=3.0475.ckpt --device cpu
   ./run.sh --plots --timefmt "%Y-%m-%d %H:%M"
-  ./run.sh --consensus-live --cons-symbol BTCUSDT --cons-horizon-m 60 --cons-edge 0.5          # <<< consensus
-  ./run.sh --consensus-eval                                                                     # <<< consensus
-  ./run.sh --consensus-plot --cons-pad-min 12                                                   # <<< consensus-plot
+  ./run.sh --consensus-live --cons-symbol BTCUSDT --cons-horizon-m 60 --cons-edge 0.5
+  ./run.sh --consensus-eval
+  ./run.sh --consensus-plot --cons-pad-min 12
 USAGE
 }
-
-# join array by space (for exec.py)
-join_by() { local IFS="$1"; shift; echo "$*"; }
 
 # =========================
 # Parse CLI
 # =========================
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --clean)     DO_CLEAN=1; shift ;;
     --full)      DO_FETCH=1; DO_FEATURES=1; DO_TRAIN=1; DO_EVAL=1; DO_PLOTS=1; shift ;;
     --fetch)     DO_FETCH=1; shift ;;
     --features)  DO_FEATURES=1; shift ;;
@@ -114,9 +125,9 @@ while [[ $# -gt 0 ]]; do
     --eval)      DO_EVAL=1; shift ;;
     --plots)     DO_PLOTS=1; shift ;;
 
-    --consensus-live) DO_CONSENSUS=1; shift ;;            # <<< consensus
-    --consensus-eval) DO_CONS_EVAL=1; shift ;;            # <<< consensus
-    --consensus-plot) DO_CONS_PLOT=1; shift ;;            # <<< consensus-plot
+    --consensus-live) DO_CONSENSUS=1; shift ;;
+    --consensus-eval) DO_CONS_EVAL=1; shift ;;
+    --consensus-plot) DO_CONS_PLOT=1; shift ;;
 
     --symbols)   read -r -a SYMBOLS <<< "$2"; shift 2 ;;
     --interval)  INTERVAL="$2"; shift 2 ;;
@@ -131,7 +142,12 @@ while [[ $# -gt 0 ]]; do
     --timefmt)   TIMEFMT="$2"; shift 2 ;;
     --skip-venv) SKIP_VENV=1; shift ;;
 
-    # <<< consensus: parse knobs
+    # clean flags
+    --clean-keep-metrics) CLEAN_KEEP_METRICS=1; shift ;;
+    --clean-dry-run)      CLEAN_DRY_RUN=1; shift ;;
+    --clean-yes)          CLEAN_YES=1; shift ;;
+
+    # consensus knobs
     --cons-symbol)    CONS_SYMBOL="$2"; shift 2 ;;
     --cons-horizon-m) CONS_HORIZON_M="$2"; shift 2 ;;
     --cons-cash)      CONS_CASH="$2"; shift 2 ;;
@@ -139,7 +155,7 @@ while [[ $# -gt 0 ]]; do
     --cons-edge)      CONS_EDGE="$2"; shift 2 ;;
     --tft-hook-cmd)   TFT_HOOK_CMD="$2"; shift 2 ;;
 
-    # <<< consensus-plot: parse knob
+    # consensus-plot knob
     --cons-pad-min)   CONS_PAD_MIN="$2"; shift 2 ;;
 
     -h|--help)   usage; exit 0 ;;
@@ -149,7 +165,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If no stage was specified, default to full
-if [[ $DO_FETCH -eq 0 && $DO_FEATURES -eq 0 && $DO_TRAIN -eq 0 && $DO_EVAL -eq 0 && $DO_PLOTS -eq 0 && $DO_CONSENSUS -eq 0 && $DO_CONS_EVAL -eq 0 && $DO_CONS_PLOT -eq 0 ]]; then
+if [[ $DO_CLEAN -eq 0 && $DO_FETCH -eq 0 && $DO_FEATURES -eq 0 && $DO_TRAIN -eq 0 && $DO_EVAL -eq 0 && $DO_PLOTS -eq 0 && $DO_CONSENSUS -eq 0 && $DO_CONS_EVAL -eq 0 && $DO_CONS_PLOT -eq 0 ]]; then
   DO_FETCH=1; DO_FEATURES=1; DO_TRAIN=1; DO_EVAL=1; DO_PLOTS=1
 fi
 
@@ -180,10 +196,28 @@ fi
 # =========================
 # Stage functions
 # =========================
+run_clean() {
+  echo "==> Cleaning workspace (data & checkpoints; keep plots)"
+  local cleaner="scripts/clean_workspace.sh"
+  if [[ ! -x "$cleaner" ]]; then
+    echo "⚠️  $cleaner not found or not executable."
+    echo "   Please create it (see docs) or make it executable: chmod +x $cleaner"
+    exit 1
+  fi
+
+  local args=()
+  [[ ${CLEAN_KEEP_METRICS:-0} -eq 1 ]] && args+=("--keep-metrics")
+  [[ ${CLEAN_DRY_RUN:-0} -eq 1 ]]      && args+=("--dry-run")
+  [[ ${CLEAN_YES:-0} -eq 1 ]]          && args+=("--yes")
+
+  # safe array expansion under set -u
+  "$cleaner" "${args[@]+"${args[@]}"}"
+}
+
 run_fetch() {
   echo "==> Fetching raw data"
   python scripts/setup_data.py \
-    --symbols "$(join_by ' ' "${SYMBOLS[@]}")" \
+    --symbols "${SYMBOLS[@]}" \
     --interval "$INTERVAL" \
     --days "$DAYS"
 }
@@ -295,14 +329,16 @@ run_consensus_plot() {
 # =========================
 # Execute selected stages
 # =========================
-[[ $DO_FETCH      -eq 1 ]] && run_fetch
-[[ $DO_FEATURES   -eq 1 ]] && run_features
-[[ $DO_TRAIN      -eq 1 ]] && run_train
-[[ $DO_EVAL       -eq 1 ]] && run_eval
-[[ $DO_PLOTS      -eq 1 ]] && run_plots
-[[ $DO_CONSENSUS  -eq 1 ]] && run_consensus_live      # <<< consensus
-[[ $DO_CONS_EVAL  -eq 1 ]] && run_consensus_eval      # <<< consensus
-[[ $DO_CONS_PLOT  -eq 1 ]] && run_consensus_plot      # <<< consensus-plot
+# Run clean first if requested (so subsequent stages start fresh)
+[[ $DO_CLEAN     -eq 1 ]] && run_clean
+[[ $DO_FETCH     -eq 1 ]] && run_fetch
+[[ $DO_FEATURES  -eq 1 ]] && run_features
+[[ $DO_TRAIN     -eq 1 ]] && run_train
+[[ $DO_EVAL      -eq 1 ]] && run_eval
+[[ $DO_PLOTS     -eq 1 ]] && run_plots
+[[ $DO_CONSENSUS -eq 1 ]] && run_consensus_live
+[[ $DO_CONS_EVAL -eq 1 ]] && run_consensus_eval
+[[ $DO_CONS_PLOT -eq 1 ]] && run_consensus_plot
 
 echo
 echo "Artifacts:"
@@ -310,4 +346,4 @@ echo "  - Checkpoints: artifacts/*.ckpt"
 echo "  - Metrics:     artifacts/evaluation.csv"
 echo "  - Plots:       artifacts/qualitative_forecast.png, artifacts/eval_*.{png,pdf}"
 echo "  - Data:        data/raw/, data/processed/merged.parquet"
-echo "  - Consensus:   artifacts/mock_trade.json, artifacts/mock_eval.json, artifacts/consensus_plot.{png,pdf}"   # <<< consensus-plot
+echo "  - Consensus:   artifacts/mock_trade.json, artifacts/mock_eval.json, artifacts/consensus_plot.{png,pdf}"
