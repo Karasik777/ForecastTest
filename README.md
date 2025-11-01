@@ -1,6 +1,45 @@
 # ForecastTest: Temporal Fusion Transformer for Cryptocurrency Forecasting
 
-## Usage (single entrypoint)
+## Quick Start (container-first)
+
+1. **Build the shared image**
+   ```bash
+   docker compose build
+   ```
+2. **Execute the staged pipeline** (separate containers, sequential order):
+   ```bash
+   ./docker/pipeline.sh --symbols "BTCUSDT ETHUSDT" --interval 1m
+   ```
+   The helper runs:
+   - `stage_fetch` → data acquisition
+   - `stage_process` → feature engineering + model training
+   - `stage_predict` → inference / live forecast generation
+   - `stage_evaluate` → model evaluation & metrics
+   - `stage_consensus` → trade evaluation (plots remain local)
+
+   Flags passed to `pipeline.sh` are forwarded to each stage so knobs such as
+   `--symbols`, `--interval`, `--lookback`, and `--epochs` stay consistent.
+
+   Individual stages remain available if you prefer manual control:
+   ```bash
+   docker compose run --rm stage_fetch --env SKIP_VENV=1
+   docker compose run --rm stage_process --env SKIP_VENV=1 --epochs 5
+   ```
+3. **Generate plots locally** (Matplotlib stays on the host):
+   ```bash
+   ./exec.sh --plots --timefmt "%Y-%m-%d %H:%M"
+   ./exec.sh --consensus-plot --cons-pad-min 10
+   ```
+4. **Ad-hoc runs (optional)**
+   ```bash
+   docker compose run --rm stage_predict --env SKIP_VENV=1 --cons-symbol BTCUSDT
+   docker compose run --rm stage_evaluate --env SKIP_VENV=1 --folds 5
+   ```
+
+See `docs/container-orchestration.md` for scaling tips, Makefile shortcuts, and
+guidance on adapting the stack to Swarm/overlay networks.
+
+## Usage (single entrypoint, local Python)
 
 ```bash
 # Run the full pipeline end-to-end

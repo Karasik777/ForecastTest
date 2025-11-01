@@ -1,1 +1,1 @@
-/Users/konstantinbelov/ForecastTest/artifacts/tft-epoch=08-val_loss=4.6119.ckpt
+/workspace/artifacts/tft-epoch=06-val_loss=5.4850.ckpt

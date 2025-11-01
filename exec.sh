@@ -277,9 +277,12 @@ fi
 # =========================
 # Environment setup
 # =========================
-[[ $SKIP_VENV -eq 0 ]] && {
+if [[ $SKIP_VENV -eq 0 ]]; then
+  # inside managed environments (e.g. Docker) users can set SKIP_VENV=1
   log "Creating/activating venv and installing deps"
-  "$PYTHON" -m venv .venv
+  if [[ ! -d .venv ]]; then
+    "$PYTHON" -m venv .venv
+  fi
   # shellcheck disable=SC1091
   source .venv/bin/activate
   pip install --upgrade pip
@@ -288,7 +291,9 @@ fi
   pip install "pytorch-forecasting>=1.3.0" || true
   [[ -f requirements.txt ]] && pip install -r requirements.txt || true
   export PYTORCH_ENABLE_MPS_FALLBACK=1
-}
+else
+  log "SKIP_VENV=1 — using existing interpreter (${PYTHON})"
+fi
 
 have "$PYTHON" || { err "Python not found: $PYTHON"; exit 1; }
 pycheck

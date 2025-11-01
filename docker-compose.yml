@@ -1,0 +1,56 @@
+networks:
+  forecast_net:
+    driver: bridge
+    name: forecast_net
+
+x-forecast-base: &forecast-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: forecasttest/pipeline:latest
+  working_dir: /workspace
+  entrypoint: ["/workspace/docker/entrypoint.sh"]
+  environment:
+    PYTHONPATH: /workspace
+    SKIP_VENV: "1"
+  volumes:
+    - .:/workspace
+    - ./data:/workspace/data
+    - ./artifacts:/workspace/artifacts
+    - ./lightning_logs:/workspace/lightning_logs
+  networks:
+    - forecast_net
+
+services:
+  stage_fetch:
+    <<: *forecast-base
+    command: ["/workspace/docker/run-stage.sh", "fetch"]
+
+  stage_process:
+    <<: *forecast-base
+    command: ["/workspace/docker/run-stage.sh", "process"]
+    depends_on:
+      - stage_fetch
+
+  stage_predict:
+    <<: *forecast-base
+    command: ["/workspace/docker/run-stage.sh", "predict"]
+    depends_on:
+      - stage_process
+
+  stage_evaluate:
+    <<: *forecast-base
+    command: ["/workspace/docker/run-stage.sh", "evaluate"]
+    depends_on:
+      - stage_process
+
+  stage_consensus:
+    <<: *forecast-base
+    command: ["/workspace/docker/run-stage.sh", "consensus"]
+    depends_on:
+      - stage_predict
+      - stage_evaluate
+
+  shell:
+    <<: *forecast-base
+    command: ["bash"]
