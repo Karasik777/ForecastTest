@@ -19,58 +19,16 @@ and marks the result as a partial window.
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
-import requests
 
-BINANCE_BASE = "https://api.binance.com"
-KLINES_EP    = "/api/v3/klines"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-
-def ensure_utc(ts_like) -> pd.Timestamp:
-    """Return a pandas Timestamp in UTC regardless of input tz-naive/aware."""
-    t = pd.Timestamp(ts_like)
-    if t.tzinfo is None:
-        return t.tz_localize("UTC")
-    return t.tz_convert("UTC")
-
-
-def iso_to_ms(s: str) -> int:
-    """ISO8601 → epoch milliseconds (UTC)."""
-    t_utc = ensure_utc(s)
-    return int(t_utc.timestamp() * 1000)
-
-
-def fetch_range_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    """
-    Fetch klines between start_ms and end_ms (UTC ms).
-    For our 60-minute window the single call (limit=1000) is sufficient.
-    """
-    url = BINANCE_BASE + KLINES_EP
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "startTime": start_ms,
-        "endTime": end_ms,
-        "limit": 1000
-    }
-    headers = {"User-Agent": "mock-consensus/1.0"}
-    resp = requests.get(url, params=params, headers=headers, timeout=30)
-    resp.raise_for_status()
-    raw = resp.json()
-
-    cols = ["open_time","open","high","low","close","volume",
-            "close_time","qav","num_trades","taker_base","taker_quote","ignore"]
-    df = pd.DataFrame(raw, columns=cols)
-    if df.empty:
-        return df
-
-    df["open_time"]  = pd.to_datetime(df["open_time"],  unit="ms", utc=True)
-    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    for c in ["open","high","low","close","volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+from forecast import ensure_utc, iso_to_ms, fetch_range_klines
 
 
 def main():
@@ -87,14 +45,33 @@ def main():
     dec = art.get("decision", {})
     fc  = art.get("forecast", {})
 
-    if not dec or dec.get("action") != "BUY":
-        print("No trade to evaluate (decision was HOLD or artifact missing).")
-        return
+    if not dec:
+        raise RuntimeError("Decision block missing in artifact; run consensus_live first.")
 
     symbol   = cfg.get("symbol", "BTCUSDT")
     interval = cfg.get("interval", "1m")
     cash     = float(cfg.get("start_cash_usd", 100.0))
     comm     = float(cfg.get("commission_per_side_usd", 2.0))
+
+    Path("artifacts").mkdir(parents=True, exist_ok=True)
+
+    if dec.get("action") != "BUY":
+        msg = dec.get("reason", "Decision did not trigger a BUY.")
+        placeholder = {
+            "evaluated_at": pd.Timestamp.utcnow().isoformat(),
+            "symbol": symbol,
+            "interval": interval,
+            "action": dec.get("action", "HOLD"),
+            "message": msg,
+            "was_partial_window": False,
+            "realized_pnl_usd": 0.0,
+            "realized_return_pct": 0.0,
+            "commission_total_usd": 0.0,
+        }
+        with open("artifacts/mock_eval.json", "w") as f:
+            json.dump(placeholder, f, indent=2)
+        print(f"[OK] Decision was {dec.get('action', 'HOLD')}; wrote placeholder → artifacts/mock_eval.json")
+        return
 
     entry_iso  = dec["entry_time"]
     target_iso = dec["target_time"]

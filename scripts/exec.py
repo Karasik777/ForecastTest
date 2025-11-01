@@ -74,13 +74,16 @@ def do_train(lookback: int, horizon: int, epochs: int, batch_size: int = 128, de
     return run(cmd)
 
 def do_eval(lookback: int, horizon: int, folds: int, checkpoint: str = ""):
+    ck = checkpoint or auto_checkpoint()
+    if not ck:
+        print("⚠️  No checkpoint found; evaluation will run naive-only metrics.")
     cmd = [PY, str(SCRIPTS / "evaluate.py"),
            "--data", "data/processed/merged.parquet",
            "--lookback", str(lookback),
            "--horizon", str(horizon),
            "--folds", str(folds)]
-    if checkpoint:
-        cmd += ["--checkpoint", checkpoint]
+    if ck:
+        cmd += ["--checkpoint", ck]
     return run(cmd)
 
 def do_live(symbol: str, max_msgs: int):

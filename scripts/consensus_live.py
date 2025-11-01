@@ -24,12 +24,14 @@ from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
-import requests
+import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-BINANCE_BASE = "https://api.binance.com"
-KLINES_EP    = "/api/v3/klines"
+from forecast import ensure_utc, fetch_recent_klines
 
 
 @dataclass
@@ -64,23 +66,6 @@ class Decision:
     expected_return_pct: float
     expected_pnl_usd: float
     commission_total_usd: float
-
-
-def fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    url = BINANCE_BASE + KLINES_EP
-    headers = {"User-Agent": "mock-consensus/1.0"}
-    resp = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit},
-                        headers=headers, timeout=30)
-    resp.raise_for_status()
-    raw = resp.json()
-    cols = ["open_time","open","high","low","close","volume","close_time","qav",
-            "num_trades","taker_base","taker_quote","ignore"]
-    df = pd.DataFrame(raw, columns=cols)
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    for c in ["open","high","low","close","volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
 
 
 def ewma_forecast(prices: np.ndarray, horizon: int) -> np.ndarray:
@@ -188,13 +173,13 @@ def main():
 
     # 1) Fetch history
     limit = max(3, min(1000, cfg.lookback_m + 1))
-    df = fetch_klines(cfg.symbol, cfg.interval, limit=limit)
+    df = fetch_recent_klines(cfg.symbol, cfg.interval, limit=limit)
     if len(df) < 10:
         raise RuntimeError("Insufficient data returned.")
 
     now_row = df.iloc[-1]
     now_price = float(now_row["close"])
-    start_ts = pd.to_datetime(now_row["close_time"]).tz_convert("UTC")
+    start_ts = ensure_utc(now_row["close_time"])
 
     # 2) Forecast
     model_name, preds = tft_hook_forecast(cfg, df)

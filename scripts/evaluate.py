@@ -13,7 +13,7 @@ import pandas as pd
 import torch
 import warnings
 
-from pytorch_lightning import seed_everything
+from lightning.pytorch import seed_everything
 from pytorch_forecasting import TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder
 from pytorch_forecasting.models import TemporalFusionTransformer
@@ -73,10 +73,10 @@ def main():
         df0["time_idx"] = df0.groupby("group_id").cumcount()
 
     # ---------- NEW: emit time_idx -> datetime label map for plotting ----------
+    dominant_gid = df0["group_id"].value_counts().idxmax()
     label_map = (
-        df0[["time_idx", "open_time"]]
+        df0.loc[df0["group_id"] == dominant_gid, ["time_idx", "open_time"]]
         .dropna()
-        .sort_values("open_time")
         .drop_duplicates("time_idx")
         .sort_values("time_idx")
     )
@@ -93,9 +93,21 @@ def main():
     ]
     keep = list(set(["group_id", "time_idx", "target"] + known_reals))
     df = df0[keep].dropna().reset_index(drop=True)
+    if df.empty:
+        raise ValueError(
+            "No usable rows remain after dropping NaNs. "
+            "Ensure features were generated with sufficient history."
+        )
+    label_encoder = NaNLabelEncoder().fit(df.group_id)
 
     tmax = int(df["time_idx"].max())
-    fold_starts = [tmax - (i + 1) * args.horizon for i in range(args.folds)][::-1]
+    raw_starts = [tmax - (i + 1) * args.horizon for i in range(args.folds)]
+    fold_starts = sorted(fs for fs in raw_starts if fs >= args.lookback)
+    if not fold_starts:
+        raise ValueError(
+            "Not enough history for the requested folds/lookback/horizon combination. "
+            "Reduce --folds or horizon, or gather more data."
+        )
 
     rows = []
     device = pick_device(args.device)
@@ -110,7 +122,7 @@ def main():
             max_prediction_length=args.horizon,
             time_varying_unknown_reals=["target"],
             time_varying_known_reals=known_reals,
-            categorical_encoders={"group_id": NaNLabelEncoder().fit(df.group_id)},
+            categorical_encoders={"group_id": label_encoder},
             add_relative_time_idx=True,
             add_target_scales=True,
             add_encoder_length=True,
@@ -170,9 +182,14 @@ def main():
         if args.checkpoint:
             if not args.checkpoint.endswith(".ckpt"):
                 print("⚠️  Note: your --checkpoint usually needs a .ckpt file extension.")
-            model = TemporalFusionTransformer.load_from_checkpoint(args.checkpoint)
-            model.to(device)
+            model = TemporalFusionTransformer.load_from_checkpoint(args.checkpoint, map_location=device)
             model.eval()
+
+            quantiles = getattr(model.loss, "quantiles", None)
+            if quantiles is None:
+                raise RuntimeError("Checkpoint loss function does not expose quantiles.")
+            quantiles = np.asarray([float(q) for q in quantiles])
+            median_idx = int(np.argmin(np.abs(quantiles - 0.5)))
 
             pred_chunks = []
             with torch.no_grad():
@@ -194,8 +211,16 @@ def main():
                     out = model(x)
                     pred_chunks.append(out["prediction"].detach().cpu())
 
+            if not pred_chunks:
+                raise RuntimeError("No validation batches produced while loading checkpoint.")
+
             preds = torch.cat(pred_chunks, dim=0).numpy()  # [N, H, Q]
-            median = preds[:, :, 3].reshape(-1)  # q=0.5 at index 3
+            if median_idx >= preds.shape[-1]:
+                raise RuntimeError(
+                    f"Median quantile index {median_idx} invalid for prediction tensor "
+                    f"with last dimension {preds.shape[-1]}."
+                )
+            median = preds[:, :, median_idx].reshape(-1)
             tft_mape = mape(true_vals, median)
             tft_rmse = rmse(true_vals, median)
 
@@ -208,6 +233,8 @@ def main():
         })
 
     out = pd.DataFrame(rows)
+    if out.empty:
+        raise RuntimeError("Evaluation produced no rows. Adjust folds/horizon or check data availability.")
     out_path = Path(args.artifacts) / "evaluation.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(out_path, index=False)

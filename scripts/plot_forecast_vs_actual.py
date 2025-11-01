@@ -21,54 +21,17 @@ Outputs:
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import requests
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-BINANCE_BASE = "https://api.binance.com"
-KLINES_EP    = "/api/v3/klines"
-
-
-def ensure_utc(ts_like) -> pd.Timestamp:
-    t = pd.Timestamp(ts_like)
-    if t.tzinfo is None:
-        return t.tz_localize("UTC")
-    return t.tz_convert("UTC")
-
-
-def iso_to_ms(s: str) -> int:
-    return int(ensure_utc(s).timestamp() * 1000)
-
-
-def fetch_range_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    url = BINANCE_BASE + KLINES_EP
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "startTime": start_ms,
-        "endTime": end_ms,
-        "limit": 1000
-    }
-    headers = {"User-Agent": "mock-consensus/1.0"}
-    resp = requests.get(url, params=params, headers=headers, timeout=30)
-    resp.raise_for_status()
-    raw = resp.json()
-
-    cols = ["open_time","open","high","low","close","volume",
-            "close_time","qav","num_trades","taker_base","taker_quote","ignore"]
-    df = pd.DataFrame(raw, columns=cols)
-    if df.empty:
-        return df
-
-    df["open_time"]  = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    for c in ["open","high","low","close","volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+from forecast import ensure_utc, iso_to_ms, fetch_range_klines
 
 
 def load_forecast(artifact_path: str, forecast_csv_path: str | None):

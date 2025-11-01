@@ -67,12 +67,16 @@ def main():
     fold_starts = df["fold_start"].tolist()
     label_series = load_label_map(Path(args.labels), Path(args.data))
     if label_series is not None:
-        fold_labels = [
-            pd.to_datetime(label_series.get(fs, pd.NaT)).strftime(args.timefmt)
-            if fs in label_series.index and pd.notna(label_series.loc[fs])
-            else str(fs)
-            for fs in fold_starts
-        ]
+        def _format_label(fs: int) -> str:
+            ts = label_series.get(fs)
+            if pd.isna(ts):
+                return str(fs)
+            ts = pd.Timestamp(ts)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            return ts.strftime(args.timefmt)
+
+        fold_labels = [_format_label(fs) for fs in fold_starts]
     else:
         print("⚠️  No datetime mapping available; using time_idx integers.")
         fold_labels = [str(fs) for fs in fold_starts]
@@ -88,7 +92,8 @@ def main():
     axes[0].set_title("MAPE by Fold (lower is better)")
     axes[0].set_xlabel("Fold start")
     axes[0].set_ylabel("MAPE (%)")
-    axes[0].set_xticks(x, fold_labels, rotation=30, ha="right")
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(fold_labels, rotation=30, ha="right")
     axes[0].grid(True, linestyle="--", alpha=0.4)
     axes[0].legend()
 
@@ -98,7 +103,8 @@ def main():
     axes[1].set_title("RMSE by Fold (lower is better)")
     axes[1].set_xlabel("Fold start")
     axes[1].set_ylabel("RMSE")
-    axes[1].set_xticks(x, fold_labels, rotation=30, ha="right")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(fold_labels, rotation=30, ha="right")
     axes[1].grid(True, linestyle="--", alpha=0.4)
     axes[1].legend()
 
@@ -130,7 +136,8 @@ def main():
     ax2.set_xlabel("Fold start")
     ax2.set_ylabel("Improvement (%)")
     # use the same datetime labels
-    ax2.set_xticks(ix, fold_labels, rotation=30, ha="right")
+    ax2.set_xticks(ix)
+    ax2.set_xticklabels(fold_labels, rotation=30, ha="right")
     ax2.grid(True, linestyle="--", alpha=0.4)
     ax2.legend()
     plt.tight_layout()

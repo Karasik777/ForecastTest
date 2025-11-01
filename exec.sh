@@ -182,6 +182,23 @@ assert_file() {
   [[ -f "$f" ]] || { err "$msg"; exit 1; }
 }
 
+latest_checkpoint() {
+  shopt -s nullglob
+  local files=("${ARTIFACTS_DIR}"/*.ckpt)
+  shopt -u nullglob
+  if (( ${#files[@]} == 0 )); then
+    echo ""
+    return 0
+  fi
+  local newest="${files[0]}"
+  for f in "${files[@]}"; do
+    if [[ "$f" -nt "$newest" ]]; then
+      newest="$f"
+    fi
+  done
+  echo "$newest"
+}
+
 mkdirs() {
   mkdir -p "$RAW_DIR" "$PROC_DIR" "$ARTIFACTS_DIR"
 }
@@ -326,13 +343,24 @@ run_train() {
     --batch-size "$BATCH_SIZE" \
     --device "$dev" \
     ${TRAIN_ARGS:+$TRAIN_ARGS}
-  ok "Training done. Checkpoints in ${ARTIFACTS_DIR} (if script saves there)."
+  local new_ckpt
+  new_ckpt="$(latest_checkpoint)"
+  if [[ -n "$new_ckpt" ]]; then
+    CHECKPOINT="$new_ckpt"
+    ok "Training done. Latest checkpoint → ${CHECKPOINT}"
+  else
+    warn "Training finished but no checkpoint detected in ${ARTIFACTS_DIR}."
+  fi
 }
 
 run_eval() {
   mkdirs
   local dev; dev="$(autodev)"
   log "Evaluating (folds=${FOLDS}, device=${dev}, seed=${SEED})"
+  if [[ -z "$CHECKPOINT" ]]; then
+    CHECKPOINT="$(latest_checkpoint)"
+    [[ -z "$CHECKPOINT" ]] && warn "No checkpoint available; TFT metrics will be omitted."
+  fi
   local base_args=(
     --data "${PROC_DIR}/merged.parquet"
     --lookback "$LOOKBACK"
@@ -341,7 +369,10 @@ run_eval() {
     --device "$dev"
     --batch-size "$BATCH_SIZE"
   )
-  [[ -n "$CHECKPOINT" ]] && base_args+=(--checkpoint "$CHECKPOINT")
+  if [[ -n "$CHECKPOINT" ]]; then
+    log "Using checkpoint ${CHECKPOINT}"
+    base_args+=(--checkpoint "$CHECKPOINT")
+  fi
   /usr/bin/env SEED="$SEED" "$PYTHON" scripts/evaluate.py \
     "${base_args[@]}" \
     ${EVAL_ARGS:+$EVAL_ARGS}
@@ -456,4 +487,8 @@ echo "  - Checkpoints: ${ARTIFACTS_DIR}/*.ckpt"
 echo "  - Metrics:     ${ARTIFACTS_DIR}/evaluation.csv"
 echo "  - Plots:       ${ARTIFACTS_DIR}/qualitative_forecast.png, ${ARTIFACTS_DIR}/eval_*.{png,pdf}"
 echo "  - Data:        ${RAW_DIR}/, ${PROC_DIR}/merged.parquet"
-echo "  - Consensus:   ${ARTIFACTS_DIR}/mock_trade.json, ${ARTIFACTS_DIR}/mock_eval.json, ${ARTIFACTS_DIR}/consensus_plot.{png,pdf}"
+if [[ -f "${ARTIFACTS_DIR}/mock_trade.json" && -f "${ARTIFACTS_DIR}/mock_eval.json" && -f "${ARTIFACTS_DIR}/consensus_plot.png" ]]; then
+  echo "  - Consensus:   ${ARTIFACTS_DIR}/mock_trade.json, ${ARTIFACTS_DIR}/mock_eval.json, ${ARTIFACTS_DIR}/consensus_plot.{png,pdf}"
+else
+  echo "  - Consensus:   (run --consensus-live / --consensus-eval / --consensus-plot to generate)"
+fi
