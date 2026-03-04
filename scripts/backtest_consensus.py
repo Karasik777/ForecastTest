@@ -74,6 +74,9 @@ def parse_args():
     p.add_argument("--grid-search",   action="store_true",
                    help="Sweep lookback × horizon grid using EWMA baseline, "
                         "then recommend the best config.")
+    p.add_argument("--oos-days",       type=int,   default=0,
+                   help="Only backtest on the last N days of data (0 = full dataset). "
+                        "Use with --train-days to isolate the out-of-sample period.")
     p.add_argument("--device",        choices=["cpu","mps","gpu","auto"], default="auto")
     p.add_argument("--batch-size",    type=int,   default=64)
     p.add_argument("--seed",          type=int,   default=42)
@@ -412,6 +415,11 @@ def main():
     # ── Decision points ──────────────────────────────────────────────────────
     tmax  = int(df_full["time_idx"].max())
     t_min = lookback
+    # Optionally restrict to last N days (out-of-sample period)
+    if args.oos_days > 0:
+        oos_start = tmax - args.oos_days * 24 * 60
+        t_min = max(t_min, oos_start)
+        print(f"OOS mode: backtesting last {args.oos_days} days only (t ≥ {t_min})")
     t_max = tmax - horizon
     if t_max <= t_min:
         raise ValueError("Insufficient data for the configured lookback/horizon.")

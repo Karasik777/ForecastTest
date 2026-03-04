@@ -36,6 +36,12 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--num-workers", type=int, default=0,
                    help="Number of worker processes for PyTorch dataloaders")
+    p.add_argument("--train-days", type=int, default=0,
+                   help="Limit training to N days of data (0 = use all). "
+                        "Useful to keep epoch length manageable on large datasets.")
+    p.add_argument("--train-from-start", action="store_true",
+                   help="With --train-days N, use the FIRST N days instead of the last N days. "
+                        "Lets you train on the beginning, backtest out-of-sample on the rest.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--artifacts", default="artifacts")
     p.add_argument("--device", choices=["auto", "cpu", "mps", "gpu"], default="auto")
@@ -127,7 +133,29 @@ def main():
         )
 
     model_type = args.model_type
-    training_cutoff = df["time_idx"].max() - args.horizon
+
+    # Optionally restrict training window
+    if args.train_days > 0:
+        train_minutes = args.train_days * 24 * 60
+        if args.train_from_start:
+            # Use the FIRST N days (walk-forward: train on start, test on end)
+            min_idx = df["time_idx"].min()
+            train_end_idx = min_idx + train_minutes
+            df_train = df[df["time_idx"] <= train_end_idx].copy()
+            label = "first"
+        else:
+            # Use the LAST N days (default)
+            max_idx = df["time_idx"].max()
+            train_start_idx = max_idx - train_minutes - args.horizon
+            df_train = df[df["time_idx"] >= train_start_idx].copy()
+            label = "last"
+        df_train["time_idx"] = df_train.groupby("group_id").cumcount()
+        print(f"Training on {label} {args.train_days} days ({len(df_train):,} rows, "
+              f"{df_train['time_idx'].max()+1} steps per group)")
+    else:
+        df_train = df
+
+    training_cutoff = df_train["time_idx"].max() - args.horizon
     if training_cutoff <= args.lookback:
         raise ValueError(
             f"Insufficient history for lookback={args.lookback} and horizon={args.horizon}. "
@@ -137,7 +165,7 @@ def main():
     # NHiTS requires add_relative_time_idx=False; TFT works with True
     use_rel_time = (model_type == "tft")
     training = TimeSeriesDataSet(
-        df[df.time_idx <= training_cutoff],
+        df_train[df_train.time_idx <= training_cutoff],
         time_idx="time_idx",
         target="target",
         group_ids=["group_id"],
@@ -145,12 +173,12 @@ def main():
         max_prediction_length=args.horizon,
         time_varying_unknown_reals=["target"],
         time_varying_known_reals=known_reals,
-        categorical_encoders={"group_id": NaNLabelEncoder().fit(df.group_id)},
+        categorical_encoders={"group_id": NaNLabelEncoder().fit(df_train.group_id)},
         add_relative_time_idx=use_rel_time,
         add_target_scales=True,
         add_encoder_length=True,
     )
-    validation = TimeSeriesDataSet.from_dataset(training, df, predict=True, stop_randomization=True)
+    validation = TimeSeriesDataSet.from_dataset(training, df_train, predict=True, stop_randomization=True)
 
     train_loader = training.to_dataloader(train=True, batch_size=args.batch_size, num_workers=args.num_workers)
     val_loader   = validation.to_dataloader(train=False, batch_size=args.batch_size, num_workers=args.num_workers)
