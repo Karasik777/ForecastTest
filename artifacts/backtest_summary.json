@@ -1,0 +1,48 @@
+{
+  "config": {
+    "symbol": "BTCUSDT",
+    "lookback": 168,
+    "horizon": 24,
+    "n_windows": 20,
+    "cash_usd": 100.0,
+    "commission_per_side_usd": 0.1,
+    "edge_pct": 0.3,
+    "breakeven_pct": 0.2
+  },
+  "results": [
+    {
+      "model": "TFT",
+      "n_windows": 19,
+      "n_buy": 8,
+      "n_hold": 11,
+      "n_wins": 1,
+      "n_losses": 7,
+      "win_rate_pct": 12.5,
+      "total_pnl_usd": -1.0127,
+      "avg_pnl_per_buy_usd": -0.1266,
+      "avg_expected_return_pct": 1.613,
+      "avg_actual_return_pct": -0.0266,
+      "directional_accuracy_pct": 57.89,
+      "avg_fc_mape_pct": 1.0421,
+      "avg_fc_rmse": 1168.7368,
+      "sharpe_ratio": -0.1944
+    },
+    {
+      "model": "EWMA+Drift",
+      "n_windows": 20,
+      "n_buy": 1,
+      "n_hold": 19,
+      "n_wins": 0,
+      "n_losses": 1,
+      "win_rate_pct": 0.0,
+      "total_pnl_usd": -0.296,
+      "avg_pnl_per_buy_usd": -0.296,
+      "avg_expected_return_pct": 0.9804,
+      "avg_actual_return_pct": -0.1962,
+      "directional_accuracy_pct": 40.0,
+      "avg_fc_mape_pct": 0.2075,
+      "avg_fc_rmse": 263.8333,
+      "sharpe_ratio": null
+    }
+  ]
+}

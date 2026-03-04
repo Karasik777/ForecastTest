@@ -19,6 +19,7 @@ Notes:
 
 import argparse
 import json
+import warnings
 from dataclasses import dataclass, asdict
 from typing import List, Tuple
 
@@ -26,6 +27,8 @@ import numpy as np
 import pandas as pd
 import sys
 from pathlib import Path
+
+warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -95,18 +98,122 @@ def ewma_forecast(prices: np.ndarray, horizon: int) -> np.ndarray:
     return path
 
 
-def tft_hook_forecast(cfg: Config, history: pd.DataFrame) -> Tuple[str, np.ndarray]:
+def tft_hook_forecast(cfg: Config, history: pd.DataFrame,
+                      checkpoint_path: str = "") -> Tuple[str, np.ndarray]:
     """
-    If you have a TFT pipeline that outputs a per-minute forecast vector,
-    integrate it here. For now we return None to use fallback.
+    Use a trained TFT checkpoint to forecast the next cfg.horizon_m price steps.
+    Applies the same feature engineering as make_features.py, then runs inference.
+    If TFT horizon < cfg.horizon_m, the remainder is filled with EWMA drift.
+    Falls back to EWMA+Drift on any error or when no checkpoint is provided.
     """
-    # Example stub: run external command that writes artifacts/forecast.csv with a 'close_pred' column
-    # import subprocess, shlex
-    # subprocess.run(shlex.split(cfg.tft_hook_cmd), check=True)
-    # art = pd.read_csv("artifacts/forecast.csv")
-    # preds = art["close_pred"].to_numpy()[: cfg.horizon_m]
-    # return "TFT", preds
-    return "EWMA+Drift", None
+    if not checkpoint_path or not Path(checkpoint_path).exists():
+        return "EWMA+Drift", None
+
+    try:
+        import torch
+        from pytorch_forecasting import TimeSeriesDataSet
+        from pytorch_forecasting.data import NaNLabelEncoder
+        from pytorch_forecasting.models import TemporalFusionTransformer
+
+        # --- Feature engineering (mirrors make_features.py) ---
+        df = history.copy().sort_values("open_time").reset_index(drop=True)
+        df["target"] = df["close"].astype("float64")
+        df["ret_1"] = np.log(df["close"]).diff()
+        df["ret_5"] = np.log(df["close"]).diff(5)
+        df["vol_20"] = df["ret_1"].rolling(20, min_periods=20).std()
+        delta = df["close"].diff()
+        gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+        loss = -delta.clip(upper=0).ewm(alpha=1/14, adjust=False).mean()
+        df["rsi_14"] = 100 - (100 / (1 + gain / (loss + 1e-12)))
+        vm = df["volume"].rolling(48, min_periods=24).mean()
+        vs = df["volume"].rolling(48, min_periods=24).std()
+        df["vol_norm"] = (df["volume"] - vm) / (vs + 1e-6)
+        for L in [1, 2, 3, 6, 12, 24]:
+            df[f"lag_{L}"] = df["target"].shift(L)
+        ts = pd.to_datetime(df["open_time"], utc=True, errors="coerce")
+        df["hour"] = ts.dt.hour.astype("int16")
+        df["dow"]  = ts.dt.dayofweek.astype("int16")
+        df["dom"]  = ts.dt.day.astype("int16")
+        df = df.iloc[50:].reset_index(drop=True)   # drop feature warmup rows
+        df["group_id"] = cfg.symbol
+        df["time_idx"] = range(len(df))
+
+        known_reals = [
+            "hour", "dow", "dom", "ret_1", "ret_5", "vol_20", "rsi_14", "vol_norm",
+            *[f"lag_{L}" for L in [1, 2, 3, 6, 12, 24]],
+        ]
+        keep = list(set(["group_id", "time_idx", "target"] + known_reals))
+        df = df[keep].dropna().reset_index(drop=True)
+        df["time_idx"] = range(len(df))
+
+        # --- Load model and determine trained horizon ---
+        device = torch.device("cpu")
+        model = TemporalFusionTransformer.load_from_checkpoint(
+            checkpoint_path, map_location=device
+        )
+        model.eval()
+
+        trained_horizon = cfg.horizon_m
+        try:
+            trained_horizon = int(model.hparams["max_prediction_length"])
+        except Exception:
+            pass
+
+        horizon = min(cfg.horizon_m, trained_horizon)
+        encoder_len = min(cfg.lookback_m, len(df) - horizon - 1)
+        if encoder_len < 10:
+            return "EWMA+Drift", None
+
+        training_cutoff = len(df) - horizon - 1
+        label_enc = NaNLabelEncoder().fit(df.group_id)
+
+        training_ds = TimeSeriesDataSet(
+            df[df.time_idx <= training_cutoff],
+            time_idx="time_idx",
+            target="target",
+            group_ids=["group_id"],
+            max_encoder_length=encoder_len,
+            max_prediction_length=horizon,
+            time_varying_unknown_reals=["target"],
+            time_varying_known_reals=known_reals,
+            categorical_encoders={"group_id": label_enc},
+            add_relative_time_idx=True,
+            add_target_scales=True,
+            add_encoder_length=True,
+        )
+        val_ds = TimeSeriesDataSet.from_dataset(
+            training_ds, df, predict=True, stop_randomization=True
+        )
+        loader = val_ds.to_dataloader(train=False, batch_size=1, num_workers=0)
+
+        quantiles = np.array([float(q) for q in model.loss.quantiles])
+        median_idx = int(np.argmin(np.abs(quantiles - 0.5)))
+
+        preds = []
+        with torch.no_grad():
+            for batch in loader:
+                x = batch[0] if isinstance(batch, (list, tuple)) else batch
+                for k, v in list(x.items()):
+                    if torch.is_tensor(v):
+                        x[k] = v.to(device)
+                preds.append(model(x)["prediction"].cpu())
+
+        if not preds:
+            return "EWMA+Drift", None
+
+        fc = torch.cat(preds, dim=0).numpy()[-1, :, median_idx]  # [horizon]
+
+        # Extend to full cfg.horizon_m with EWMA drift if needed
+        if len(fc) < cfg.horizon_m:
+            remaining = cfg.horizon_m - len(fc)
+            ext = ewma_forecast(np.array([float(fc[-1])]), remaining)
+            fc = np.concatenate([fc, ext])
+
+        return "TFT", fc[:cfg.horizon_m]
+
+    except Exception as e:
+        print(f"[WARN] TFT hook failed ({e}); falling back to EWMA+Drift")
+        return "EWMA+Drift", None
 
 
 def decide_trade(cfg: Config, now_price: float, forecast: np.ndarray,
@@ -156,6 +263,9 @@ def main():
     p.add_argument("--commission_per_side_usd", type=float, default=2.0)
     p.add_argument("--min_edge_pct", type=float, default=0.5)
     p.add_argument("--tft_hook_cmd", default="")
+    p.add_argument("--checkpoint", default="",
+                   help="Path to trained TFT .ckpt file. If omitted, "
+                        "reads artifacts/last_checkpoint.txt automatically.")
     args = p.parse_args()
 
     cfg = Config(
@@ -168,6 +278,18 @@ def main():
         tft_hook_cmd=args.tft_hook_cmd,
         min_edge_pct=args.min_edge_pct
     )
+
+    # Resolve checkpoint: explicit arg > last_checkpoint.txt > none
+    checkpoint_path = args.checkpoint
+    if not checkpoint_path:
+        ptr = Path("artifacts") / "last_checkpoint.txt"
+        if ptr.exists():
+            checkpoint_path = ptr.read_text().strip()
+    if checkpoint_path and not Path(checkpoint_path).exists():
+        print(f"[WARN] Checkpoint not found at {checkpoint_path!r}; will use EWMA+Drift.")
+        checkpoint_path = ""
+    if checkpoint_path:
+        print(f"[INFO] Using TFT checkpoint: {checkpoint_path}")
 
     Path("artifacts").mkdir(parents=True, exist_ok=True)
 
@@ -182,7 +304,7 @@ def main():
     start_ts = ensure_utc(now_row["close_time"])
 
     # 2) Forecast
-    model_name, preds = tft_hook_forecast(cfg, df)
+    model_name, preds = tft_hook_forecast(cfg, df, checkpoint_path=checkpoint_path)
     if preds is None or len(preds) < cfg.horizon_m:
         preds = ewma_forecast(df["close"].to_numpy(), cfg.horizon_m)
         model_name = "EWMA+Drift"

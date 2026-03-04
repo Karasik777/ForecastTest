@@ -62,6 +62,7 @@ DO_PLOTS=0
 DO_CONSENSUS=0
 DO_CONS_EVAL=0
 DO_CONS_PLOT=0
+DO_BACKTEST=0
 
 # Per-stage extra args (quoted strings passed through)
 FETCH_ARGS=""
@@ -72,6 +73,8 @@ PLOTS_ARGS=""
 CONS_LIVE_ARGS=""
 CONS_EVAL_ARGS=""
 CONS_PLOT_ARGS=""
+BACKTEST_WINDOWS=20
+BACKTEST_ARGS=""
 
 # =========================
 # Helpers
@@ -91,6 +94,7 @@ Stages (pick any; default is --full if none chosen):
   --consensus-live        Run mock consensus decision now (scripts/consensus_live.py)
   --consensus-eval        Evaluate realized PnL for last consensus (scripts/evaluate_pnl.py)
   --consensus-plot        Plot consensus forecast/actuals & PnL (scripts/plot_consensus.py)
+  --backtest              Simulate TFT consensus over historical data; measure P&L & win rate
 
 Knobs (override defaults):
   --symbols "BTCUSDT ETHUSDT"   Symbols (space-separated, quote the list)
@@ -123,6 +127,7 @@ Consensus knobs:
   --cons-edge 0.5               Extra edge (%) over breakeven required to trade
   --tft-hook-cmd "python ..."   Optional TFT pipeline command to produce preds
   --cons-pad-min 10             Minutes of padding around forecast window (plot)
+  --backtest-windows 20         Number of evenly-spaced windows for --backtest
 
 Per-stage passthrough (quoted):
   --fetch-args "--api-key XXX --rate-limit 10"
@@ -219,6 +224,9 @@ while [[ $# -gt 0 ]]; do
     --consensus-live) DO_CONSENSUS=1; shift ;;
     --consensus-eval) DO_CONS_EVAL=1; shift ;;
     --consensus-plot) DO_CONS_PLOT=1; shift ;;
+    --backtest) DO_BACKTEST=1; shift ;;
+    --backtest-windows) BACKTEST_WINDOWS="$2"; shift 2 ;;
+    --backtest-args) BACKTEST_ARGS="$2"; shift 2 ;;
 
     # knobs
     --symbols) read -r -a SYMBOLS <<< "$2"; shift 2 ;;
@@ -268,7 +276,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If no stage specified → full
-if [[ $DO_CLEAN -eq 0 && $DO_FETCH -eq 0 && $DO_FEATURES -eq 0 && $DO_TRAIN -eq 0 && $DO_EVAL -eq 0 && $DO_PLOTS -eq 0 && $DO_CONSENSUS -eq 0 && $DO_CONS_EVAL -eq 0 && $DO_CONS_PLOT -eq 0 ]]; then
+if [[ $DO_CLEAN -eq 0 && $DO_FETCH -eq 0 && $DO_FEATURES -eq 0 && $DO_TRAIN -eq 0 && $DO_EVAL -eq 0 && $DO_PLOTS -eq 0 && $DO_CONSENSUS -eq 0 && $DO_CONS_EVAL -eq 0 && $DO_CONS_PLOT -eq 0 && $DO_BACKTEST -eq 0 ]]; then
   DO_FETCH=1; DO_FEATURES=1; DO_TRAIN=1; DO_EVAL=1; DO_PLOTS=1
 fi
 
@@ -437,6 +445,36 @@ run_consensus_eval() {
   ok "Consensus-eval done → ${ARTIFACTS_DIR}/mock_eval.json"
 }
 
+run_backtest() {
+  mkdirs
+  local dev; dev="$(autodev)"
+  log "Running consensus backtest (n_windows=${BACKTEST_WINDOWS}, device=${dev}, seed=${SEED})"
+  if [[ -z "$CHECKPOINT" ]]; then
+    CHECKPOINT="$(latest_checkpoint)"
+    [[ -z "$CHECKPOINT" ]] && warn "No checkpoint found; TFT metrics will be skipped (EWMA-only)."
+  fi
+  local base_args=(
+    --data "${PROC_DIR}/merged.parquet"
+    --lookback "$LOOKBACK"
+    --horizon "$HORIZON"
+    --n-windows "$BACKTEST_WINDOWS"
+    --cash "$CONS_CASH"
+    --commission "$CONS_COMM"
+    --edge-pct "$CONS_EDGE"
+    --device "$dev"
+    --batch-size "$BATCH_SIZE"
+    --seed "$SEED"
+    --artifacts "$ARTIFACTS_DIR"
+  )
+  [[ -n "$CHECKPOINT" ]] && base_args+=(--checkpoint "$CHECKPOINT")
+  "$PYTHON" scripts/backtest_consensus.py \
+    "${base_args[@]}" \
+    ${BACKTEST_ARGS:+$BACKTEST_ARGS}
+  assert_file "${ARTIFACTS_DIR}/backtest_summary.json" \
+    "Expected ${ARTIFACTS_DIR}/backtest_summary.json after backtest."
+  ok "Backtest done → ${ARTIFACTS_DIR}/backtest_summary.json"
+}
+
 run_consensus_plot() {
   mkdirs
   log "Plotting consensus trade"
@@ -485,6 +523,7 @@ print_config
 [[ $DO_CONSENSUS -eq 1 ]] && run_consensus_live
 [[ $DO_CONS_EVAL -eq 1 ]] && run_consensus_eval
 [[ $DO_CONS_PLOT -eq 1 ]] && run_consensus_plot
+[[ $DO_BACKTEST  -eq 1 ]] && run_backtest
 
 echo
 ok "Artifacts:"
@@ -496,4 +535,9 @@ if [[ -f "${ARTIFACTS_DIR}/mock_trade.json" && -f "${ARTIFACTS_DIR}/mock_eval.js
   echo "  - Consensus:   ${ARTIFACTS_DIR}/mock_trade.json, ${ARTIFACTS_DIR}/mock_eval.json, ${ARTIFACTS_DIR}/consensus_plot.{png,pdf}"
 else
   echo "  - Consensus:   (run --consensus-live / --consensus-eval / --consensus-plot to generate)"
+fi
+if [[ -f "${ARTIFACTS_DIR}/backtest_summary.json" ]]; then
+  echo "  - Backtest:    ${ARTIFACTS_DIR}/backtest_summary.json, ${ARTIFACTS_DIR}/backtest_trades.csv, ${ARTIFACTS_DIR}/backtest_pnl.png"
+else
+  echo "  - Backtest:    (run --backtest to generate)"
 fi
