@@ -1,0 +1,48 @@
+{
+  "config": {
+    "symbol": "BTCUSDT",
+    "lookback": 168,
+    "horizon": 24,
+    "n_windows": 30,
+    "exit_strategy": "end",
+    "trend_filter": 30,
+    "cash_usd": 100.0,
+    "commission_per_side": 0.1,
+    "edge_pct": 0.3,
+    "breakeven_pct": 0.2
+  },
+  "results": [
+    {
+      "model": "Deep Model (TFT/NHiTS)",
+      "n_windows": 29,
+      "n_buy": 4,
+      "n_hold": 25,
+      "n_trend_blocked": 18,
+      "n_wins": 3,
+      "n_losses": 1,
+      "win_rate_pct": 75.0,
+      "total_pnl_usd": 0.0174,
+      "avg_pnl_per_buy": 0.0043,
+      "directional_acc": 54.55,
+      "avg_mape_pct": 1.0101,
+      "avg_rmse": 1127.4178,
+      "sharpe_ratio": null
+    },
+    {
+      "model": "EWMA+Drift",
+      "n_windows": 30,
+      "n_buy": 0,
+      "n_hold": 30,
+      "n_trend_blocked": 18,
+      "n_wins": 0,
+      "n_losses": 0,
+      "win_rate_pct": null,
+      "total_pnl_usd": 0.0,
+      "avg_pnl_per_buy": null,
+      "directional_acc": 58.33,
+      "avg_mape_pct": 0.1664,
+      "avg_rmse": 213.7102,
+      "sharpe_ratio": null
+    }
+  ]
+}

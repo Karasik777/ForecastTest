@@ -1,1 +1,1 @@
-/home/user/ForecastTest/artifacts/tft-epoch=08-val_loss=4.5859.ckpt
+/home/user/ForecastTest/artifacts/nhits-epoch=01-val_loss=25.7925.ckpt
