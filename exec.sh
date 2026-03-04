@@ -24,6 +24,7 @@ EPOCHS=15
 FOLDS=3
 BATCH_SIZE=64
 TRAIN_DEVICE="cpu"        # cpu | mps | gpu | auto
+MODEL_TYPE="tft"          # tft | nhits
 CHECKPOINT=""             # path to .ckpt for --eval stage
 TIMEFMT="%Y-%m-%d %H:%M"  # matplotlib ticks
 SKIP_VENV=0
@@ -88,7 +89,7 @@ Stages (pick any; default is --full if none chosen):
   --full                  Run fetch -> features -> train -> eval -> plots
   --fetch                 Only fetch raw data (setup_data.py)
   --features              Only build features (make_features.py)
-  --train                 Only train TFT (train_tft.py)
+  --train                 Only train model (train_tft.py; use --model-type to choose)
   --eval                  Only evaluate (evaluate.py)
   --plots                 Only make evaluation plots (plot_evaluation.py)
   --consensus-live        Run mock consensus decision now (scripts/consensus_live.py)
@@ -105,6 +106,7 @@ Knobs (override defaults):
   --epochs 15                   Training epochs
   --folds 3                     Rolling folds for evaluation
   --batch-size 64               Batch size for train/eval
+  --model-type tft|nhits        Model architecture (default: tft)
   --device cpu|mps|gpu|auto     Device for training/prediction (auto = CUDA→MPS→CPU)
   --checkpoint path.ckpt        Checkpoint for evaluation plots (optional for --eval)
   --timefmt "%Y-%m-%d %H:%M"    Datetime format for plots
@@ -237,6 +239,7 @@ while [[ $# -gt 0 ]]; do
     --epochs) EPOCHS="$2"; shift 2 ;;
     --folds) FOLDS="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --model-type) MODEL_TYPE="$2"; shift 2 ;;
     --device) TRAIN_DEVICE="$2"; shift 2 ;;
     --checkpoint) CHECKPOINT="$2"; shift 2 ;;
     --timefmt) TIMEFMT="$2"; shift 2 ;;
@@ -347,9 +350,10 @@ run_features() {
 run_train() {
   mkdirs
   local dev; dev="$(autodev)"
-  log "Training TFT (device=${dev}, seed=${SEED})"
+  log "Training ${MODEL_TYPE^^} (device=${dev}, seed=${SEED})"
   /usr/bin/env SEED="$SEED" "$PYTHON" scripts/train_tft.py \
     --data "${PROC_DIR}/merged.parquet" \
+    --model-type "$MODEL_TYPE" \
     --lookback "$LOOKBACK" \
     --horizon "$HORIZON" \
     --epochs "$EPOCHS" \
@@ -499,6 +503,7 @@ print_config() {
   echo "Epochs:           ${EPOCHS}"
   echo "Folds:            ${FOLDS}"
   echo "Batch size:       ${BATCH_SIZE}"
+  echo "Model type:       ${MODEL_TYPE}"
   echo "Device:           ${TRAIN_DEVICE}"
   echo "Checkpoint:       ${CHECKPOINT:-<none>}"
   echo "Seed:             ${SEED}"

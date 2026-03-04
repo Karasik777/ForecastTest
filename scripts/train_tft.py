@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Train a small Temporal Fusion Transformer on processed panel data.
+Train a Temporal Fusion Transformer or N-HiTS model on processed panel data.
 
-Example:
-  python scripts/train_tft.py --data data/processed/merged.parquet --lookback 168 --horizon 24 --epochs 15
+Examples:
+  python scripts/train_tft.py --model-type tft   --lookback 168 --horizon 24 --epochs 15
+  python scripts/train_tft.py --model-type nhits --lookback 168 --horizon 24 --epochs 15
 """
 import argparse
 import warnings
@@ -15,19 +16,20 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-# Modern Lightning (Option A)
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
-# PyTorch Forecasting
 from pytorch_forecasting import TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder
 from pytorch_forecasting.metrics import QuantileLoss
-from pytorch_forecasting.models import TemporalFusionTransformer
+from pytorch_forecasting.models import TemporalFusionTransformer, NHiTS
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--data", default="data/processed/merged.parquet")
+    p.add_argument("--model-type", choices=["tft", "nhits"], default="tft",
+                   help="Model architecture: 'tft' (TemporalFusionTransformer) or "
+                        "'nhits' (N-HiTS — lighter, faster, comparable accuracy)")
     p.add_argument("--lookback", type=int, default=168)
     p.add_argument("--horizon", type=int, default=24)
     p.add_argument("--epochs", type=int, default=15)
@@ -38,6 +40,16 @@ def parse_args():
     p.add_argument("--artifacts", default="artifacts")
     p.add_argument("--device", choices=["auto", "cpu", "mps", "gpu"], default="auto")
     return p.parse_args()
+
+def _load_model(ckpt_path: str, device: torch.device):
+    """Load TFT or N-HiTS from checkpoint; tries TFT first, falls back to NHiTS."""
+    for cls in [TemporalFusionTransformer, NHiTS]:
+        try:
+            return cls.load_from_checkpoint(ckpt_path, map_location=device)
+        except Exception:
+            continue
+    raise RuntimeError(f"Could not load model from {ckpt_path!r}")
+
 
 def accel_from_arg(device: str):
     if device == "cpu":
@@ -114,6 +126,7 @@ def main():
             "Regenerate features with a longer history or review preprocessing."
         )
 
+    model_type = args.model_type
     training_cutoff = df["time_idx"].max() - args.horizon
     if training_cutoff <= args.lookback:
         raise ValueError(
@@ -121,6 +134,8 @@ def main():
             "Collect more data or reduce lookback/horizon."
         )
 
+    # NHiTS requires add_relative_time_idx=False; TFT works with True
+    use_rel_time = (model_type == "tft")
     training = TimeSeriesDataSet(
         df[df.time_idx <= training_cutoff],
         time_idx="time_idx",
@@ -131,7 +146,7 @@ def main():
         time_varying_unknown_reals=["target"],
         time_varying_known_reals=known_reals,
         categorical_encoders={"group_id": NaNLabelEncoder().fit(df.group_id)},
-        add_relative_time_idx=True,
+        add_relative_time_idx=use_rel_time,
         add_target_scales=True,
         add_encoder_length=True,
     )
@@ -141,24 +156,45 @@ def main():
     val_loader   = validation.to_dataloader(train=False, batch_size=args.batch_size, num_workers=args.num_workers)
 
     loss = QuantileLoss()
-    tft = TemporalFusionTransformer.from_dataset(
-        training,
-        learning_rate=1e-3,
-        hidden_size=32,
-        attention_head_size=4,
-        dropout=0.1,
-        hidden_continuous_size=16,
-        loss=loss,
-        output_size=len(loss.quantiles),
-        log_interval=50,
-        reduce_on_plateau_patience=3,
-    )
+    print(f"Building {model_type.upper()} model …")
+
+    if model_type == "nhits":
+        model = NHiTS.from_dataset(
+            training,
+            learning_rate=1e-3,
+            hidden_size=64,
+            n_blocks=[1, 1, 1],
+            n_layers=2,
+            dropout=0.1,
+            backcast_loss_ratio=0.0,
+            loss=loss,
+            output_size=len(loss.quantiles),
+            log_interval=50,
+            reduce_on_plateau_patience=3,
+        )
+    else:
+        model = TemporalFusionTransformer.from_dataset(
+            training,
+            learning_rate=1e-3,
+            hidden_size=32,
+            attention_head_size=4,
+            dropout=0.1,
+            hidden_continuous_size=16,
+            loss=loss,
+            output_size=len(loss.quantiles),
+            log_interval=50,
+            reduce_on_plateau_patience=3,
+        )
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"  Parameters: {total_params:,}  ({total_params/1e3:.1f}K)")
 
     es = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=3, mode="min")
     Path(args.artifacts).mkdir(parents=True, exist_ok=True)
     ck = ModelCheckpoint(
         monitor="val_loss", save_top_k=1, mode="min",
-        dirpath=args.artifacts, filename="tft-{epoch:02d}-{val_loss:.4f}"
+        dirpath=args.artifacts,
+        filename=f"{model_type}-{{epoch:02d}}-{{val_loss:.4f}}"
     )
 
     # Trainer for training (on chosen device)
@@ -172,7 +208,7 @@ def main():
         log_every_n_steps=10,
     )
 
-    trainer.fit(tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
     best_path = ck.best_model_path
     print(f"Best checkpoint: {best_path}")
     if best_path:
@@ -180,7 +216,7 @@ def main():
         pointer.write_text(str(best_path) + "\n")
 
     # --------- PREDICT (manual, no PredictCallback / trainer.predict) ----------
-    best = TemporalFusionTransformer.load_from_checkpoint(best_path)
+    best = _load_model(best_path, device)
 
     # pick device consistent with training
     device = select_device(accel_kwargs)
